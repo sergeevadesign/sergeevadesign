@@ -1,0 +1,59 @@
+name: Publish portfolio
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'portfolio-part-*.zip'
+      - '.github/workflows/publish.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Unpack portfolio
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib, json, pathlib, stat, zipfile
+          expected = json.loads('{"portfolio-part-01.zip":"9d756aa96d31109d36bb1f2c55beeb7d0b963b06b9c7e013ca71ada4646e02ca","portfolio-part-02.zip":"29cc89c8f53e7acc55bbbbd842cfb6a2df16b1c61e561dc8205bf7dc2ef2678f","portfolio-part-03.zip":"3b75b9ae78655b2356c9c33e025ee5589745a66b8baa0f932a0666ca6f291d93","portfolio-part-04.zip":"455d447dcd569d36063e0d65b146bed3b14549b1b18e0015b1602cee8005c7d7","portfolio-part-05.zip":"9874bc8f6e7f7cca1b9288905166794ab1ba86bb0f30649857fa1d3f68012a09","portfolio-part-06.zip":"af4c70674fb6b5e1294c1738ab04d67f0503add2b87e2d19628f7f0595b429d7","portfolio-part-07.zip":"ceb731e1b7b6a390ba754d50d1628a9bed9d0c219d5c4adc0af537d9782b0c45"}')
+          root = pathlib.Path('_site')
+          root.mkdir(exist_ok=True)
+          seen = set()
+          for name, digest in expected.items():
+              archive = pathlib.Path(name)
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+                  raise SystemExit('Archive checksum mismatch: ' + name)
+              with zipfile.ZipFile(archive) as source:
+                  for item in source.infolist():
+                      path = pathlib.PurePosixPath(item.filename)
+                      if path.is_absolute() or '..' in path.parts or stat.S_ISLNK(item.external_attr >> 16):
+                          raise SystemExit('Invalid archive path')
+                      if item.filename in seen:
+                          raise SystemExit('Duplicate archive path')
+                      seen.add(item.filename)
+                  source.extractall(root)
+          assert (root / 'index.html').is_file()
+          (root / '.nojekyll').touch()
+          print('Ready to publish:', len(seen), 'files')
+          PYTHON
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v4
